@@ -27,7 +27,6 @@ import (
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/mem"
 	"github.com/yann-y/fds/dag/pool/ipfs"
-	"github.com/yann-y/fds/internal/uleveldb"
 	"io"
 	"net/http"
 	"path"
@@ -71,7 +70,7 @@ var _ Service = (*service)(nil)
 
 // service store sys
 type service struct {
-	Db         *uleveldb.ULevelDB
+	//Db         *uleveldb.ULevelDB
 	DagPool    ipld.DAGService
 	CidBuilder cid.Builder
 	//nsLock          *lock.NsLockMap
@@ -88,13 +87,12 @@ type service struct {
 }
 
 // NewService new a storage sys
-func NewService(ctx context.Context, dagService ipld.DAGService, db *uleveldb.ULevelDB, providers providers.Providerser, options ...Option) *service {
+func NewService(ctx context.Context, dagService ipld.DAGService, providers providers.Providerser, options ...Option) *service {
 	cidBuilder, _ := merkledag.PrefixForCidVersion(0)
 	s := &service{
-		Db:         db,
 		DagPool:    dagService,
 		CidBuilder: cidBuilder,
-		//nsLock:     lock.NewNSLock(),
+
 		gcPeriod:  15 * time.Minute,
 		gcTimeout: 30 * time.Minute,
 
@@ -437,20 +435,20 @@ func (s *service) CleanObjectsInBucket(ctx context.Context, bucket string) error
 	defer cancel()
 
 	prefixKey := fmt.Sprintf(allObjectPrefixFormat, bucket, "")
-	all, err := s.Db.ReadAllChan(ctx, prefixKey, "")
-	if err != nil {
-		return err
-	}
-	for entry := range all {
-		var o ObjectInfo
-		if err = entry.UnmarshalValue(&o); err != nil {
-			return err
+	err := s.providers.GetStateStore().Iterate(prefixKey, func(key, _ []byte) (stop bool, er error) {
+		record := &ObjectInfo{}
+		er = s.providers.GetStateStore().Get(string(key), record)
+		if er != nil {
+			return
 		}
-		if err = s.DeleteObject(ctx, bucket, o.Name); err != nil {
-			return err
+
+		if err := s.DeleteObject(ctx, bucket, record.Name); err != nil {
+			return
 		}
-	}
-	return nil
+		return
+	})
+
+	return err
 }
 
 // ListObjectsInfo - container for list objects.
@@ -504,7 +502,7 @@ func (s *service) ListObjects(ctx context.Context, bucket string, prefix string,
 		seekKey = fmt.Sprintf(allObjectSeekKeyFormat, bucket, marker)
 	}
 	prefixKey := fmt.Sprintf(allObjectPrefixFormat, bucket, prefix)
-	all, err := s.Db.ReadAllChan(ctx, prefixKey, seekKey)
+	all, err := s.providers.GetStateStore().ReadAllChan(ctx, prefixKey, seekKey)
 	if err != nil {
 		return loi, err
 	}
@@ -1114,7 +1112,7 @@ func (s *service) ListMultipartUploads(ctx context.Context, bucket, prefix, keyM
 	if keyMarker != "" {
 		seekKey = fmt.Sprintf(allUploadSeekKeyFormat, bucket, keyMarker, uploadIDMarker)
 	}
-	all, err := s.Db.ReadAllChan(ctx, fmt.Sprintf(allUploadPrefixFormat, bucket, prefix), seekKey)
+	all, err := s.providers.GetStateStore().ReadAllChan(ctx, fmt.Sprintf(allUploadPrefixFormat, bucket, prefix), seekKey)
 	if err != nil {
 		return result, err
 	}
@@ -1131,6 +1129,7 @@ func (s *service) ListMultipartUploads(ctx context.Context, bucket, prefix, keyM
 		index++
 		result.Uploads = append(result.Uploads, mi)
 	}
+
 	if result.IsTruncated {
 		next := result.Uploads[len(result.Uploads)-1]
 		result.NextKeyMarker = next.Object
@@ -1148,32 +1147,61 @@ func (s *service) deleteObjets(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, s.gcTimeout)
 	defer cancel()
 
-	all, err := s.Db.ReadAllChan(ctx, allDeletePrefixFormat, "")
-	if err != nil {
-		return err
-	}
-	for entry := range all {
+	//all, err := s.Db.ReadAllChan(ctx, allDeletePrefixFormat, "")
+	//if err != nil {
+	//	return err
+	//}
+	//for entry := range all {
+	//	var root string
+	//	if err = entry.UnmarshalValue(&root); err != nil {
+	//		return err
+	//	}
+	//	c, err := cid.Decode(root)
+	//	if err != nil {
+	//		log.Warnw("decode cid error", "cid", root)
+	//		if err = s.Db.Delete(entry.Key); err != nil {
+	//			return err
+	//		}
+	//		continue
+	//	}
+	//	if err = dagpoolcli.RemoveDAG(ctx, s.DagPool, c); err != nil {
+	//		log.Errorw("remove DAG error", "cid", c.String(), "error", err)
+	//		break
+	//	}
+	//	if err = s.Db.Delete(entry.Key); err != nil {
+	//		return err
+	//	}
+	//}
+
+	err := s.providers.GetStateStore().Iterate(allDeletePrefixFormat, func(key, _ []byte) (stop bool, er error) {
 		var root string
-		if err = entry.UnmarshalValue(&root); err != nil {
-			return err
+		er = s.providers.GetStateStore().Get(string(key), &root)
+		if er != nil {
+			return
 		}
+
 		c, err := cid.Decode(root)
 		if err != nil {
 			log.Warnw("decode cid error", "cid", root)
-			if err = s.Db.Delete(entry.Key); err != nil {
-				return err
+			if err = s.providers.GetStateStore().Delete(string(key)); err != nil {
+				return true, err
 			}
-			continue
+			//continue
+			return
 		}
 		if err = dagpoolcli.RemoveDAG(ctx, s.DagPool, c); err != nil {
 			log.Errorw("remove DAG error", "cid", c.String(), "error", err)
-			break
+			//break
+			return true, err
 		}
-		if err = s.Db.Delete(entry.Key); err != nil {
-			return err
+		if err = s.providers.GetStateStore().Delete(string(key)); err != nil {
+			return true, err
 		}
-	}
-	return nil
+
+		return
+	})
+
+	return err
 }
 
 // processObjectGC is a goroutine to do object GC

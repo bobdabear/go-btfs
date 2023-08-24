@@ -221,3 +221,45 @@ s.providers.GetStateStore().Put
 
 //undo
 s.Db.ReadAllChan
+
+待处理问题：
+1.leveldb删完
+2.btfs cid处理 各种reader
+3.mutipart upload
+
+
+func (s *service) GetAllBucketsOfUser(username string) (list []*Bucket, err error) {
+	err = s.providers.GetStateStore().Iterate(bucketPrefix, func(key, _ []byte) (stop bool, er error) {
+		record := &Bucket{}
+		er = s.providers.GetStateStore().Get(string(key), record)
+		if er != nil {
+			return
+		}
+		if record.Owner == username {
+			list = append(list, record)
+		}
+
+		return
+	})
+
+	return
+}
+
+
+prefixKey = fmt.Sprintf(allObjectPrefixFormat, bucket, "")
+err = s.providers.GetStateStore().Iterate(prefixKey, func(key, _ []byte) (stop bool, er error) {
+	record := &ObjectInfo{}
+	er = s.providers.GetStateStore().Get(string(key), record)
+	if er != nil {
+		return
+	}
+
+	if err = s.DeleteObject(ctx, bucket, record.Name); err != nil {
+		return
+	}
+	return
+})
+
+？？？
+有两处list处理，类似翻页处理，暂时无法处理。需要注意？
+ReadAllChan
