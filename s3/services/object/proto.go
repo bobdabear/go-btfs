@@ -1,22 +1,34 @@
 package object
 
 import (
+	"context"
+	"github.com/bittorrent/go-btfs/s3/datatypes"
 	"github.com/bittorrent/go-btfs/s3/utils/hash"
+	"io"
 	"time"
 )
 
 type Service interface {
-	//CheckACL(accessKeyRecord *accesskey.AccessKey, bucketName string, action action.Action) (err error)
-	//CreateBucket(ctx context.Context, bucket, region, accessKey, acl string) error
-	//GetBucketMeta(ctx context.Context, bucket string) (meta Bucket, err error)
-	//HasBucket(ctx context.Context, bucket string) bool
-	//SetEmptyBucket(emptyBucket func(ctx context.Context, bucket string) (bool, error))
-	//DeleteBucket(ctx context.Context, bucket string) error
-	//GetAllBucketsOfUser(username string) (list []*Bucket, err error)
-	//UpdateBucketAcl(ctx context.Context, bucket, acl string) error
-	//GetBucketAcl(ctx context.Context, bucket string) (string, error)
-	//EmptyBucket(ctx context.Context, bucket string) (bool, error)
+	//object
+	SetHasBucket(hasBucket func(ctx context.Context, bucket string) bool)
+	CopyObject(ctx context.Context, bucket, object string, info ObjectInfo, size int64, meta map[string]string) (ObjectInfo, error)
+	StoreObject(ctx context.Context, bucket, object string, reader *hash.Reader, size int64, meta map[string]string) (ObjectInfo, error)
+	PutObjectInfo(ctx context.Context, objInfo ObjectInfo) error
+	GetObject(ctx context.Context, bucket, object string) (ObjectInfo, io.ReadCloser, error)
+	GetObjectInfo(ctx context.Context, bucket, object string) (meta ObjectInfo, err error)
+	DeleteObject(ctx context.Context, bucket, object string) error
+	CleanObjectsInBucket(ctx context.Context, bucket string) error
 
+	ListObjects(ctx context.Context, bucket string, prefix string, marker string, delimiter string, maxKeys int) (loi ListObjectsInfo, err error)
+	EmptyBucket(ctx context.Context, bucket string) (bool, error)
+	ListObjectsV2(ctx context.Context, bucket string, prefix string, continuationToken string, delimiter string, maxKeys int, owner bool, startAfter string) (ListObjectsV2Info, error)
+	NewMultipartUpload(ctx context.Context, bucket string, object string, meta map[string]string) (MultipartInfo, error)
+	GetMultipartInfo(ctx context.Context, bucket string, object string, uploadID string) (MultipartInfo, error)
+	PutObjectPart(ctx context.Context, bucket string, object string, uploadID string, partID int, reader *hash.Reader, size int64, meta map[string]string) (pi objectPartInfo, err error)
+	CompleteMultiPartUpload(ctx context.Context, bucket string, object string, uploadID string, parts []datatypes.CompletePart) (oi ObjectInfo, err error)
+	AbortMultipartUpload(ctx context.Context, bucket string, object string, uploadID string) error
+
+	ListMultipartUploads(ctx context.Context, bucket, prefix, keyMarker, uploadIDMarker, delimiter string, maxUploads int) (result ListMultipartsInfo, err error)
 }
 
 // ObjectInfo - represents object metadata.
