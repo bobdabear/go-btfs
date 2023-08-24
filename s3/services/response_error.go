@@ -259,6 +259,11 @@ var (
 		description:    "The operation is not valid for the current state of the object.",
 		httpStatusCode: http.StatusForbidden,
 	}
+	RespErrObjectStateNotFound = &ResponseError{
+		code:           "ObjectStateNotFound",
+		description:    "The object is not found.",
+		httpStatusCode: http.StatusBadRequest,
+	}
 	RespErrAuthorizationHeaderMalformed = &ResponseError{
 		code:           "AuthorizationHeaderMalformed",
 		description:    "The authorization header is malformed; the region is wrong; expecting 'us-east-1'.",
