@@ -227,7 +227,7 @@ s.Db.ReadAllChan
 2.btfs cid处理 各种reader
 3.mutipart upload
 
-注意：？？？
+注意1中：？？？
 有两处list处理，类似翻页处理，暂时无法处理。需要注意？
 ReadAllChan
 
