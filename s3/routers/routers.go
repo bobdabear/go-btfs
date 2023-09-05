@@ -55,8 +55,9 @@ func (routers *Routers) Register() http.Handler {
 	//bucket.Methods(http.MethodPut).Path("/{object:.+}").HeadersRegexp("X-Amz-Copy-Source", ".*?(\\/|%2F).*?").HandlerFunc(hs.CopyObjectHandler)
 	//// DeleteObject
 	//bucket.Methods(http.MethodDelete).Path("/{object:.+}").HandlerFunc(hs.DeleteObjectHandler)
-	////todo DeleteObjects new ?
-	//bucket.Methods(http.MethodDelete).Path("/{object:.+}").HandlerFunc(hs.DeleteObjectHandler)
+	// DeleteMultipleObjects
+	bucket.Methods(http.MethodPost).HandlerFunc(hs.DeleteMultipleObjectsHandler).Queries("delete", "")
+
 	//// GetObject
 	//bucket.Methods(http.MethodGet).Path("/{object:.+}").HandlerFunc(hs.GetObjectHandler)
 	//// GetObjectACL

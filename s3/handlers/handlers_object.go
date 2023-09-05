@@ -1,14 +1,20 @@
 package handlers
 
 import (
+	"encoding/xml"
 	"errors"
+	"github.com/bittorrent/go-btfs/s3/action"
 	"github.com/bittorrent/go-btfs/s3/cctx"
 	"github.com/bittorrent/go-btfs/s3/consts"
 	"github.com/bittorrent/go-btfs/s3/requests"
 	"github.com/bittorrent/go-btfs/s3/responses"
 	"github.com/bittorrent/go-btfs/s3/s3utils"
+	"github.com/bittorrent/go-btfs/s3/services/object"
+	"github.com/bittorrent/go-btfs/s3/utils"
 	"github.com/bittorrent/go-btfs/s3/utils/hash"
+	"github.com/gorilla/mux"
 	"net/http"
+	"path"
 	"time"
 )
 
@@ -332,65 +338,220 @@ func (h *Handlers) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
 //	responses.WriteSuccessNoContent(w)
 //}
 //
-//// DeleteObjectsHandler - delete objects
-//// https://docs.aws.amazon.com/AmazonS3/latest/API/API_DeleteObjects.html
-//func (h *Handlers) DeleteObjectsHandler(w http.ResponseWriter, r *http.Request) {
-//	ctx := r.Context()
-//	ack := cctx.GetAccessKey(r)
-//	var err error
-//	defer func() {
-//		cctx.SetHandleInf(r, h.name(), err)
-//	}()
-//
-//	bucname, objname, err := requests.ParseBucketAndObject(r)
-//	if err != nil {
-//		responses.WriteErrorResponse(w, r, responses.ErrInvalidRequestParameter)
-//		return
-//	}
-//	if err := s3utils.CheckDelObjArgs(ctx, bucname, objname); err != nil {
-//		responses.WriteErrorResponse(w, r, err)
-//		return
-//	}
-//
-//	err = h.bucsvc.CheckACL(ack, bucname, action.DeleteObjectAction)
-//	if errors.Is(err, object.ErrBucketNotFound) {
-//		responses.WriteErrorResponse(w, r, responses.ErrNoSuchBucket)
-//		return
-//	}
-//	if err != nil {
-//		responses.WriteErrorResponse(w, r, err)
-//		return
-//	}
-//
-//	// rlock bucket
-//	runlock, err := h.rlock(ctx, bucname, w, r)
-//	if err != nil {
-//		return
-//	}
-//	defer runlock()
-//
-//	// lock object
-//	unlock, err := h.lock(ctx, bucname+"/"+objname, w, r)
-//	if err != nil {
-//		return
-//	}
-//	defer unlock()
-//
-//	//objsvc
-//	obj, err := h.objsvc.GetObjectInfo(ctx, bucname, objname)
-//	if err != nil {
-//		responses.WriteErrorResponse(w, r, err)
-//		return
-//	}
-//	//objsvc
-//	err = h.objsvc.DeleteObject(ctx, bucname, objname)
-//	if err != nil {
-//		responses.WriteErrorResponse(w, r, err)
-//		return
-//	}
-//	setPutObjHeaders(w, obj, true)
-//	responses.WriteSuccessNoContent(w)
-//}
+
+func trimLeadingSlash(ep string) string {
+	if len(ep) > 0 && ep[0] == '/' {
+		// Path ends with '/' preserve it
+		if ep[len(ep)-1] == '/' && len(ep) > 1 {
+			ep = path.Clean(ep)
+			ep += "/"
+		} else {
+			ep = path.Clean(ep)
+		}
+		ep = ep[1:]
+	}
+	return ep
+}
+
+// DeletedObject objects deleted
+type DeletedObject struct {
+	DeleteMarker          bool   `xml:"DeleteMarker,omitempty"`
+	DeleteMarkerVersionID string `xml:"DeleteMarkerVersionId,omitempty"`
+	ObjectName            string `xml:"Key,omitempty"`
+	VersionID             string `xml:"VersionId,omitempty"`
+}
+
+// ObjectV object version key/versionId
+type ObjectV struct {
+	ObjectName string `xml:"Key"`
+	VersionID  string `xml:"VersionId"`
+}
+
+// ObjectToDelete carries key name for the object to delete.
+type ObjectToDelete struct {
+	ObjectV
+}
+
+// DeleteObjectsRequest - xml carrying the object key names which needs to be deleted.
+type DeleteObjectsRequest struct {
+	// Element to enable quiet mode for the request
+	Quiet bool
+	// List of objects to be deleted
+	Objects []ObjectToDelete `xml:"Object"`
+}
+
+type DeleteMultipleObjectsRequest struct {
+	BucName          string
+	ObjName          string
+	DeleteObjectsReq DeleteObjectsRequest
+}
+
+func parseReqDeleteMultipleObjects(r *http.Request) (req *DeleteMultipleObjectsRequest, err error) {
+	req = &DeleteMultipleObjectsRequest{}
+
+	req.BucName = mux.Vars(r)["bucket"]
+
+	// Content-Md5/Content-Length is requied should be set
+	if _, ok := r.Header[consts.ContentMD5]; !ok {
+		err = responses.ErrMissingContentMD5
+		return
+	}
+	if r.ContentLength <= 0 {
+		err = responses.ErrMissingContentLength
+		return
+	}
+
+	// The max. XML contains 100000 object names (each at most 1024 bytes long) + XML overhead
+	const maxBodySize = 2 * 100000 * 1024
+
+	// Unmarshal list of keys to be deleted.
+	deleteObjectsReq := DeleteObjectsRequest{}
+	if err := utils.XmlDecoder(r.Body, deleteObjectsReq, maxBodySize); err != nil {
+		err = responses.ErrMalformedXML
+		return
+	}
+
+	// Convert object name delete objects if it has `/` in the beginning.
+	for i := range deleteObjectsReq.Objects {
+		deleteObjectsReq.Objects[i].ObjectName = trimLeadingSlash(deleteObjectsReq.Objects[i].ObjectName)
+	}
+
+	// Return Malformed XML as S3 spec if the number of objects is empty
+	if len(deleteObjectsReq.Objects) == 0 || len(deleteObjectsReq.Objects) > consts.MaxDeleteList {
+		err = responses.ErrMalformedXML
+		return
+	}
+
+	req.DeleteObjectsReq = deleteObjectsReq
+	return
+}
+
+// DeleteError structure.
+type DeleteError struct {
+	Code      string
+	Message   string
+	Key       string
+	VersionID string `xml:"VersionId"`
+}
+
+// DeleteObjectsResponse container for multiple object deletes.
+type DeleteObjectsResponse struct {
+	XMLName xml.Name `xml:"http://s3.amazonaws.com/doc/2006-03-01/ DeleteResult" json:"-"`
+
+	// Collection of all deleted objects
+	DeletedObjects []DeletedObject `xml:"Deleted,omitempty"`
+
+	// Collection of errors deleting certain objects.
+	Errors []DeleteError `xml:"Error,omitempty"`
+}
+
+type deleteResult struct {
+	delInfo DeletedObject
+	errInfo DeleteError
+}
+
+func packRespDeleteMultipleObjects(deleteList []ObjectToDelete, dObjects []DeletedObject, errs []error, quiet bool) (resp DeleteObjectsResponse) {
+	deleteResults := make([]deleteResult, len(deleteList))
+	for i := range errs {
+		if errs[i] == nil {
+			deleteResults[i].delInfo = dObjects[i]
+			continue
+		}
+		//apiErrCode := apierrors.ToApiError(ctx, errs[i])
+		//apiErr := apierrors.GetAPIError(apiErrCode)
+
+		code := 1
+		message := "err"
+
+		deleteResults[i].errInfo = DeleteError{
+			Code:      code,
+			Message:   message,
+			Key:       deleteList[i].ObjectName,
+			VersionID: deleteList[i].VersionID,
+		}
+	}
+
+	// Generate response
+	deleteErrors := make([]error, 0, len(deleteList))
+	deletedObjects := make([]DeletedObject, 0, len(deleteList))
+	for _, deleteResult := range deleteResults {
+		if deleteResult.errInfo.Code != "" {
+			deleteErrors = append(deleteErrors, deleteResult.errInfo)
+		} else {
+			deletedObjects = append(deletedObjects, deleteResult.delInfo)
+		}
+	}
+
+	resp = DeleteObjectsResponse{}
+	if !quiet {
+		resp.DeletedObjects = deletedObjects
+	}
+	resp.Errors = errs
+	return resp
+}
+
+// DeleteMultipleObjectsHandler - Delete multiple objects
+func (h *Handlers) DeleteMultipleObjectsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	ack := cctx.GetAccessKey(r)
+	var err error
+	defer func() {
+		cctx.SetHandleInf(r, h.name(), err)
+	}()
+
+	req, err := parseReqDeleteMultipleObjects(r)
+	if err != nil {
+		responses.WriteErrorResponse(w, r, err)
+		return
+	}
+	bucname, deleteObjectsReq := req.BucName, req.DeleteObjectsReq
+
+	err = h.bucsvc.CheckACL(ack, bucname, action.DeleteObjectsAction)
+	if errors.Is(err, object.ErrBucketNotFound) {
+		responses.WriteErrorResponse(w, r, responses.ErrNoSuchBucket)
+		return
+	}
+	if err != nil {
+		responses.WriteErrorResponse(w, r, err)
+		return
+	}
+
+	// rlock bucket
+	runlock, err := h.rlock(ctx, bucname, w, r)
+	if err != nil {
+		return
+	}
+	defer runlock()
+
+	// lock object
+	unlock, err := h.lock(ctx, bucname+"/"+objname, w, r)
+	if err != nil {
+		return
+	}
+	defer unlock()
+
+	//delete objects
+	ctx = r.Context()
+	deleteList := deleteObjectsReq.Objects //toNames(objectsToDelete)
+	dObjects := make([]DeletedObject, len(deleteList))
+	errs := make([]error, len(deleteList))
+	for i, obj := range deleteList {
+		if errs[i] = s3utils.CheckDelObjArgs(ctx, bucname, obj.ObjectName); errs[i] != nil {
+			continue
+		}
+		errs[i] = h.objsvc.DeleteObject(ctx, ack, bucname, obj.ObjectName)
+		if errs[i] == nil {
+			dObjects[i] = DeletedObject{
+				ObjectName: obj.ObjectName,
+			}
+			errs[i] = nil
+		}
+	}
+
+	resp := packRespDeleteMultipleObjects(deleteList, dObjects, errs, deleteObjectsReq.Quiet)
+	responses.WriteSuccessResponseXML(w, r, resp)
+}
+
 //
 //// GetObjectHandler - GET Object
 //// https://docs.aws.amazon.com/AmazonS3/latest/API/API_GetObject.html
