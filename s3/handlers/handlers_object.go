@@ -372,8 +372,8 @@ type ObjectToDelete struct {
 	ObjectV
 }
 
-// DeleteObjectsRequest - xml carrying the object key names which needs to be deleted.
-type DeleteObjectsRequest struct {
+// DeleteObjectsXmlInfo - xml carrying the object key names which needs to be deleted.
+type DeleteObjectsXmlInfo struct {
 	// Element to enable quiet mode for the request
 	Quiet bool
 	// List of objects to be deleted
@@ -381,9 +381,8 @@ type DeleteObjectsRequest struct {
 }
 
 type DeleteMultipleObjectsRequest struct {
-	BucName          string
-	ObjName          string
-	DeleteObjectsReq DeleteObjectsRequest
+	BucName              string
+	DeleteObjectsXmlInfo DeleteObjectsXmlInfo
 }
 
 func parseReqDeleteMultipleObjects(r *http.Request) (req *DeleteMultipleObjectsRequest, err error) {
@@ -405,24 +404,24 @@ func parseReqDeleteMultipleObjects(r *http.Request) (req *DeleteMultipleObjectsR
 	const maxBodySize = 2 * 100000 * 1024
 
 	// Unmarshal list of keys to be deleted.
-	deleteObjectsReq := DeleteObjectsRequest{}
-	if err := utils.XmlDecoder(r.Body, deleteObjectsReq, maxBodySize); err != nil {
+	deleteObjectsXmlInfo := DeleteObjectsXmlInfo{}
+	if err := utils.XmlDecoder(r.Body, deleteObjectsXmlInfo, maxBodySize); err != nil {
 		err = responses.ErrMalformedXML
 		return
 	}
 
 	// Convert object name delete objects if it has `/` in the beginning.
-	for i := range deleteObjectsReq.Objects {
-		deleteObjectsReq.Objects[i].ObjectName = trimLeadingSlash(deleteObjectsReq.Objects[i].ObjectName)
+	for i := range deleteObjectsXmlInfo.Objects {
+		deleteObjectsXmlInfo.Objects[i].ObjectName = trimLeadingSlash(deleteObjectsXmlInfo.Objects[i].ObjectName)
 	}
 
 	// Return Malformed XML as S3 spec if the number of objects is empty
-	if len(deleteObjectsReq.Objects) == 0 || len(deleteObjectsReq.Objects) > consts.MaxDeleteList {
+	if len(deleteObjectsXmlInfo.Objects) == 0 || len(deleteObjectsXmlInfo.Objects) > consts.MaxDeleteList {
 		err = responses.ErrMalformedXML
 		return
 	}
 
-	req.DeleteObjectsReq = deleteObjectsReq
+	req.DeleteObjectsXmlInfo = deleteObjectsXmlInfo
 	return
 }
 
@@ -501,7 +500,7 @@ func (h *Handlers) DeleteMultipleObjectsHandler(w http.ResponseWriter, r *http.R
 		responses.WriteErrorResponse(w, r, err)
 		return
 	}
-	bucname, deleteObjectsReq := req.BucName, req.DeleteObjectsReq
+	bucname, deleteObjectsXmlInfo := req.BucName, req.DeleteObjectsXmlInfo
 
 	err = h.bucsvc.CheckACL(ack, bucname, action.DeleteObjectsAction)
 	if errors.Is(err, object.ErrBucketNotFound) {
@@ -529,7 +528,7 @@ func (h *Handlers) DeleteMultipleObjectsHandler(w http.ResponseWriter, r *http.R
 
 	//delete objects
 	ctx = r.Context()
-	deleteList := deleteObjectsReq.Objects //toNames(objectsToDelete)
+	deleteList := deleteObjectsXmlInfo.Objects //toNames(objectsToDelete)
 	dObjects := make([]DeletedObject, len(deleteList))
 	errs := make([]error, len(deleteList))
 	for i, obj := range deleteList {
@@ -545,7 +544,7 @@ func (h *Handlers) DeleteMultipleObjectsHandler(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	resp := packRespDeleteMultipleObjects(h, deleteList, dObjects, errs, deleteObjectsReq.Quiet)
+	resp := packRespDeleteMultipleObjects(h, deleteList, dObjects, errs, deleteObjectsXmlInfo.Quiet)
 	responses.WriteSuccessResponseXML(w, r, resp)
 }
 
