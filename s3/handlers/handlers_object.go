@@ -450,29 +450,25 @@ type deleteResult struct {
 	errInfo DeleteError
 }
 
-func packRespDeleteMultipleObjects(deleteList []ObjectToDelete, dObjects []DeletedObject, errs []error, quiet bool) (resp DeleteObjectsResponse) {
+func packRespDeleteMultipleObjects(h *Handlers, deleteList []ObjectToDelete, dObjects []DeletedObject, errs []error, quiet bool) (resp DeleteObjectsResponse) {
 	deleteResults := make([]deleteResult, len(deleteList))
 	for i := range errs {
 		if errs[i] == nil {
 			deleteResults[i].delInfo = dObjects[i]
 			continue
 		}
-		//apiErrCode := apierrors.ToApiError(ctx, errs[i])
-		//apiErr := apierrors.GetAPIError(apiErrCode)
-
-		code := 1
-		message := "err"
+		rerr := h.respErr(errs[i])
 
 		deleteResults[i].errInfo = DeleteError{
-			Code:      code,
-			Message:   message,
+			Code:      rerr.Code(),
+			Message:   rerr.Description(),
 			Key:       deleteList[i].ObjectName,
 			VersionID: deleteList[i].VersionID,
 		}
 	}
 
 	// Generate response
-	deleteErrors := make([]error, 0, len(deleteList))
+	deleteErrors := make([]DeleteError, 0, len(deleteList))
 	deletedObjects := make([]DeletedObject, 0, len(deleteList))
 	for _, deleteResult := range deleteResults {
 		if deleteResult.errInfo.Code != "" {
@@ -482,11 +478,12 @@ func packRespDeleteMultipleObjects(deleteList []ObjectToDelete, dObjects []Delet
 		}
 	}
 
+	// check quiet
 	resp = DeleteObjectsResponse{}
 	if !quiet {
 		resp.DeletedObjects = deletedObjects
 	}
-	resp.Errors = errs
+	resp.Errors = deleteErrors
 	return resp
 }
 
@@ -548,7 +545,7 @@ func (h *Handlers) DeleteMultipleObjectsHandler(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	resp := packRespDeleteMultipleObjects(deleteList, dObjects, errs, deleteObjectsReq.Quiet)
+	resp := packRespDeleteMultipleObjects(h, deleteList, dObjects, errs, deleteObjectsReq.Quiet)
 	responses.WriteSuccessResponseXML(w, r, resp)
 }
 
