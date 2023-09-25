@@ -182,7 +182,7 @@ func (s *cashoutService) CashoutResults() ([]CashOutResult, error) {
 // CashCheque sends a cashout transaction for the last cheque of the vault
 func (s *cashoutService) CashCheque(ctx context.Context, vault, recipient common.Address, token common.Address) (common.Hash, error) {
 	if RestartFixCashOutStatusLock {
-		return common.Hash{}, errors.New("Just started, it can not cash cheque, you will wait for about 40s to do it. ")
+		return common.Hash{}, errors.New("Just started, it can not cash cheque for processing the cash cheque out status last time, you will wait for about 40s to do it. ")
 	}
 
 	cheque, err := s.chequeStore.LastReceivedCheque(vault, token)
@@ -334,7 +334,7 @@ func (s *cashoutService) storeCashResult(ctx context.Context, vault common.Addre
 // AdjustCashCheque .
 func (s *cashoutService) AdjustCashCheque(ctx context.Context, vaultAddress, recipient common.Address, token common.Address) (totalCashOutAmount, newCashOutAmount *big.Int, err error) {
 	if RestartFixCashOutStatusLock {
-		return nil, nil, errors.New("Just started, it can not fix cash out status, you will wait for about 40s to do it. ")
+		return nil, nil, errors.New("Just started, it can not fix cash out info for processing the cash cheque out status last time, you will wait for about 40s to do it. ")
 	}
 
 	// 1.totalReceivedCashed
@@ -430,12 +430,26 @@ func (s *cashoutService) RestartFixChequeCashOut() {
 
 			for _, v := range list {
 				txHash := common.HexToHash(v.TxHash)
+
+				// 1.check txHash is ok
+				receipt, err := s.backend.TransactionReceipt(context.Background(), txHash)
+				if err != nil {
+					log.Infof("RestartFixChequeCashOut: TransactionReceipt err = %v, info = %+v", err, v)
+					continue
+				}
+				if receipt.Status == types.ReceiptStatusFailed {
+					log.Infof("RestartFixChequeCashOut: TransactionReceipt err = the txHash is failed, info = %+v", v)
+					continue
+				}
+
+				// 2.adjust cash cheque info
 				_, _, err = s.AdjustCashChequeTxHash(context.Background(), v.Vault, v.Beneficiary, v.Token, txHash, v.CumulativePayout)
 				if err != nil {
 					log.Infof("RestartFixChequeCashOut: AdjustCashCheque err = %v, info = %+v", err, v)
 					continue
 				}
 
+				// 3.delete cash out status
 				err = s.DeleteCashOutStatusStore(v)
 				if err != nil {
 					log.Infof("RestartFixChequeCashOut: DeleteCashOutStatusStore err = %v, info = %+v", err, v)
