@@ -3,6 +3,7 @@ package requests
 import (
 	"errors"
 	"net/http"
+
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/bittorrent/go-btfs/s3/api/contexts"
 	"github.com/bittorrent/go-btfs/s3/api/services/object"
