@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 
@@ -120,11 +121,13 @@ var decryptCmd = &cmds.Command{
 		} else {
 			readClose, err = shell.NewLocalShell().Cat(cid)
 			if err != nil {
+				fmt.Println("cat error:", err)
 				return err
 			}
 		}
 		ecdsaPrivateKey, err := ethCrypto.HexToECDSA(conf.Identity.HexPrivKey)
 		if err != nil {
+			fmt.Println("HexToECDSA error:", err)
 			return err
 		}
 		eciesPrivateKey := ecies.ImportECDSA(ecdsaPrivateKey)
@@ -135,6 +138,7 @@ var decryptCmd = &cmds.Command{
 		defer readClose.Close()
 		dedata, err := ECCDecrypt(endata, *eciesPrivateKey)
 		if err != nil {
+			fmt.Println("ECCDecrypt error:", err)
 			panic(err)
 		}
 		fileName := "./decrypt-file-of-" + cid
